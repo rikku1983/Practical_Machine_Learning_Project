@@ -1,0 +1,142 @@
+---
+title: "Practical Machine Learning Project1"
+author: "li sun"
+date: "07/20/2015"
+output: html_document
+---
+
+#Introduction:
+Wearable devices has more and more adopted by different people for different purpose through out our daily life. One of the very important capability those devices can provide is predict people activity. Most of the prediction are trying to distinguish what people are doing like walking or runing. Machine learning has been widely used as the thinking power to help analyzing the huge among of data produced by those wearable devices. 
+However, much less effort has been exerted about "how (well)" the people is doing some specific activity, which has huge potential in various aspects, such as improve athletes training. 
+We now have a data set collected from 6 young health participants performed dumbbell lifting in 5 different ways shared generously by Ugulino, Velloso and Fuks. We are trying to build a model to predict how they were liting the dumbbell(which way of the 5 ways pre-defined).
+
+#Data collection
+See http://groupware.les.inf.puc-rio.br/har
+
+#Data loading and exploring
+##1. download file
+```{r echo=FALSE}
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "./training.csv", method="libcurl")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "./testing.csv", method="libcurl")
+train <- read.csv("training.csv")
+test <- read.csv("testing.csv")
+
+library(caret)
+library(randomForest)
+library(gbm)
+library(plyr)
+library(ggplot2)
+
+dim(train)
+str(train)
+```
+As you see, we should use the any combination from the 159 to build a model predicting "class"
+
+##2. Data clean
+Dimension reduction first, we can remove obviously unrelated columns
+```{r}
+train2 <- train[,-(1:7)]
+test2 <- test[, -(1:7)]
+dim(train)
+```
+Lots of NAs will affect prediction, we will remove columns with more than 90% NAs
+```{r}
+cutoff <-nrow(train2)*0.9
+cols <- apply(train2, 2, function(x) sum(is.na(x))>cutoff ||sum(x=="")>cutoff)
+train3 <- train2[, !cols]
+test3 <- test2[, !cols]
+```
+Some columns has very low variance which can provide little infomation to help us predict, so we will remove those ones.
+```{r}
+cols2<-nearZeroVar(train3, saveMetrics=T)
+sum(!cols2$nzv)
+```
+None columns have been removed.
+
+##3. Model building
+Based on our beloved Jeff told us the most accurate method normally will go to random forest. So we will try to build our model by using random forest.
+Considering the size of the data we have, we will try a portion(25%) of that and see how are we doing.
+```{r}
+set.seed(0930)
+inT<-createDataPartition(train3$classe,  p=.25, list=F)
+T25 <- train3[inT,]
+mod25 <- randomForest(classe~., data=T25)
+```
+
+To further remove extra variables with less info, we can check the correlation between 
+```{r}
+#get importance from each var based on rf analysis
+imp <- varImp(mod25)
+
+x<-T25[,-ncol(T25)]
+c<-data.frame(cor(x, x))
+for(i in 1:(ncol(T25)-1)) c[i,i]<-0
+
+extraVar<-character()
+
+for(i in 1:(ncol(T25)-2)){
+  if(names(c)[i] %in% extraVar){
+    next
+    }
+  tempvar <- names(c)[i]
+  #print(length(tempvar))
+  for(j in (i+1):(ncol(T25)-1)){
+    if(c[i,j]>=.9||c[i,j]<=-.9){
+      #print(c(names(c)[i],"!!!",names(c)[j]))
+      tempvar <- append(tempvar, names(c)[j])
+      #print(cor(train3[,names(c)[i]], train3[,names(c)[j]]))
+      #print(tempvar)
+    }
+  }
+  
+  if(length(tempvar)>1){
+    df<-data.frame(var=tempvar, importance=imp[tempvar,])
+    #print(df)
+    extraVar <- c(extraVar, as.character(df[order(df[,2],decreasing=T),][-1,]$var))
+  }
+}
+extraVar2 <- unique(extraVar)
+extraVar2
+```
+The variables:
+'r extraVar2' are not providing very much more infomation because they are highly corelated with one of the other variables. So let's get rid of those several variables to further shrink the data size.
+```{r}
+ind <- rep(FALSE, ncol(T25))
+for(i in extraVar2){
+  varInd <- grepl(i, names(T25))
+  ind <- ind|varInd
+}
+train4 <- train3[, !ind]
+```
+
+With the least variables providing most infomation, we can start to build our real model.First we need to repartition the training set to 2 for cross validation.
+```{r}
+inTrain <- createDataPartition(train4$classe, p=.75, list=FALSE)
+tr <- train4[inTrain,]
+te <- train4[-inTrain,]
+```
+
+Similarly, we use Ramdom forest to predict
+```{r}
+model <- randomForest(classe~., data=tr)
+model
+```
+Looks Good!
+Now cross validation:
+```{r}
+pre <- predict(model, te)
+rfmatrix<-confusionMatrix(pre, te$classe)
+rfmatrix
+```
+Accuracy over 99%!!
+Out of sample error rate is : 0.0049
+
+##Prediction
+```{r}
+pred <- predict(model, test3)
+pred
+```
+
+#Conclusion
+To predict "how (well)" a person is performing dumb lifting, we use the data collected from different sensors on different parts of the lifter to tell how the lifting has been done. Dimension reduction phase is accomplished by removing NA-rich variable and less important variables with duplicated information. Model was built by using random forest method and prediction has been done on 20 observations. Cross-validation show the accuracy is 0.9951 which is very good.
+
